@@ -7,8 +7,8 @@ use crate::ir;
 use crate::ir::immediates::Imm64;
 use crate::ir::stackslot::{StackOffset, StackSize};
 use crate::ir::{
-    get_probestack_funcref, AbiParam, ArgumentExtension, ArgumentLoc, ArgumentPurpose, InstBuilder,
-    ValueLoc,
+    get_probestack_funcref, AbiParam, ArgumentExtension, ArgumentLoc, ArgumentPurpose,
+    FrameLayoutChange, InstBuilder, ValueLoc,
 };
 use crate::isa::{CallConv, RegClass, RegUnit, TargetIsa};
 use crate::regalloc::RegisterSet;
@@ -300,6 +300,12 @@ fn baldrdash_prologue_epilogue(func: &mut ir::Function, isa: &dyn TargetIsa) -> 
     Ok(())
 }
 
+struct CFAState {
+    reg: RegUnit,
+    offset: isize,
+    position: isize,
+}
+
 /// Implementation of the fastcall-based Win64 calling convention described at [1]
 /// [1] https://msdn.microsoft.com/en-us/library/ms235286.aspx
 fn fastcall_prologue_epilogue(func: &mut ir::Function, isa: &dyn TargetIsa) -> CodegenResult<()> {
@@ -361,14 +367,27 @@ fn fastcall_prologue_epilogue(func: &mut ir::Function, isa: &dyn TargetIsa) -> C
         func.signature.returns.push(csr_arg);
     }
 
+    let mut cfa_state = CFAState {
+        reg: RU::rsp as RegUnit,
+        offset: word_size as isize,
+        position: -(word_size as isize),
+    };
+
     // Set up the cursor and insert the prologue
     let entry_ebb = func.layout.entry_block().expect("missing entry block");
     let mut pos = EncCursor::new(func, isa).at_first_insertion_point(entry_ebb);
-    insert_common_prologue(&mut pos, local_stack_size, reg_type, &csrs, isa);
+    insert_common_prologue(
+        &mut pos,
+        local_stack_size,
+        reg_type,
+        &csrs,
+        isa,
+        &mut cfa_state,
+    );
 
     // Reset the cursor and insert the epilogue
     let mut pos = pos.at_position(CursorPosition::Nowhere);
-    insert_common_epilogues(&mut pos, local_stack_size, reg_type, &csrs);
+    insert_common_epilogues(&mut pos, local_stack_size, reg_type, &csrs, &cfa_state);
 
     Ok(())
 }
@@ -416,14 +435,27 @@ fn system_v_prologue_epilogue(func: &mut ir::Function, isa: &dyn TargetIsa) -> C
         func.signature.returns.push(csr_arg);
     }
 
+    let mut cfa_state = CFAState {
+        reg: RU::rsp as RegUnit,
+        offset: word_size as isize,
+        position: -(word_size as isize),
+    };
+
     // Set up the cursor and insert the prologue
     let entry_ebb = func.layout.entry_block().expect("missing entry block");
     let mut pos = EncCursor::new(func, isa).at_first_insertion_point(entry_ebb);
-    insert_common_prologue(&mut pos, local_stack_size, reg_type, &csrs, isa);
+    insert_common_prologue(
+        &mut pos,
+        local_stack_size,
+        reg_type,
+        &csrs,
+        isa,
+        &mut cfa_state,
+    );
 
     // Reset the cursor and insert the epilogue
     let mut pos = pos.at_position(CursorPosition::Nowhere);
-    insert_common_epilogues(&mut pos, local_stack_size, reg_type, &csrs);
+    insert_common_epilogues(&mut pos, local_stack_size, reg_type, &csrs, &cfa_state);
 
     Ok(())
 }
@@ -436,7 +468,9 @@ fn insert_common_prologue(
     reg_type: ir::types::Type,
     csrs: &RegisterSet,
     isa: &dyn TargetIsa,
+    cfa_state: &mut CFAState,
 ) {
+    let word_size = isa.pointer_bytes();
     if stack_size > 0 {
         // Check if there is a special stack limit parameter. If so insert stack check.
         if let Some(stack_limit_arg) = pos.func.special_param(ArgumentPurpose::StackLimit) {
@@ -445,21 +479,58 @@ fn insert_common_prologue(
             // Also, the size of a return address, implicitly pushed by a x86 `call` instruction,
             // also should be accounted for.
             // TODO: Check if the function body actually contains a `call` instruction.
-            let word_size = isa.pointer_bytes();
             let total_stack_size = (csrs.iter(GPR).len() + 1 + 1) as i64 * word_size as i64;
 
             insert_stack_check(pos, total_stack_size, stack_limit_arg);
         }
     }
 
+    pos.func.frame_layout.initial = vec![
+        FrameLayoutChange::CallFrameAddressAt {
+            reg: cfa_state.reg,
+            offset: cfa_state.offset,
+        },
+        FrameLayoutChange::RaAt {
+            cfa_offset: cfa_state.position,
+        },
+    ]
+    .into_boxed_slice();
+
     // Append param to entry EBB
     let ebb = pos.current_ebb().expect("missing ebb under cursor");
     let fp = pos.func.dfg.append_ebb_param(ebb, reg_type);
     pos.func.locations[fp] = ir::ValueLoc::Reg(RU::rbp as RegUnit);
 
-    pos.ins().x86_push(fp);
-    pos.ins()
+    let push_fp_inst = pos.ins().x86_push(fp);
+    let word_size = word_size as isize;
+    cfa_state.position -= word_size;
+    cfa_state.offset += word_size;
+    pos.func.frame_layout.instructions.insert(
+        push_fp_inst,
+        vec![
+            FrameLayoutChange::CallFrameAddressAt {
+                reg: cfa_state.reg,
+                offset: cfa_state.offset,
+            },
+            FrameLayoutChange::RegAt {
+                reg: RU::rbp as RegUnit,
+                cfa_offset: cfa_state.position,
+            },
+        ]
+        .into_boxed_slice(),
+    );
+    let mov_sp_inst = pos
+        .ins()
         .copy_special(RU::rsp as RegUnit, RU::rbp as RegUnit);
+    cfa_state.reg = RU::rbp as RegUnit;
+    pos.func.frame_layout.instructions.insert(
+        mov_sp_inst,
+        vec![FrameLayoutChange::CallFrameAddressAt {
+            reg: cfa_state.reg,
+            offset: cfa_state.offset,
+        }]
+        .into_boxed_slice(),
+    );
 
     for reg in csrs.iter(GPR) {
         // Append param to entry EBB
@@ -469,7 +540,16 @@ fn insert_common_prologue(
         pos.func.locations[csr_arg] = ir::ValueLoc::Reg(reg);
 
         // Remember it so we can push it momentarily
-        pos.ins().x86_push(csr_arg);
+        let reg_push_inst = pos.ins().x86_push(csr_arg);
+        cfa_state.position -= word_size;
+        pos.func.frame_layout.instructions.insert(
+            reg_push_inst,
+            vec![FrameLayoutChange::RegAt {
+                reg: reg,
+                cfa_offset: cfa_state.position,
+            }]
+            .into_boxed_slice(),
+        );
     }
 
     // Allocate stack frame storage.
@@ -547,12 +627,13 @@ fn insert_common_epilogues(
     stack_size: i64,
     reg_type: ir::types::Type,
     csrs: &RegisterSet,
+    cfa_state: &CFAState,
 ) {
     while let Some(ebb) = pos.next_ebb() {
         pos.goto_last_inst(ebb);
         if let Some(inst) = pos.current_inst() {
             if pos.func.dfg[inst].opcode().is_return() {
-                insert_common_epilogue(inst, stack_size, pos, reg_type, csrs);
+                insert_common_epilogue(inst, stack_size, pos, reg_type, csrs, &cfa_state);
             }
         }
     }
@@ -560,12 +641,14 @@ fn insert_common_epilogues(
 
 /// Insert an epilogue given a specific `return` instruction.
 /// This is used by common calling conventions such as System V.
+/// TODO implement and handle _cfa_state more than one epilogue.
 fn insert_common_epilogue(
     inst: ir::Inst,
     stack_size: i64,
     pos: &mut EncCursor,
     reg_type: ir::types::Type,
     csrs: &RegisterSet,
+    _cfa_state: &CFAState,
 ) {
     if stack_size > 0 {
         pos.ins().adjust_sp_up_imm(Imm64::new(stack_size));

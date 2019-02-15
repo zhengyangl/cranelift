@@ -11,7 +11,7 @@ use crate::ir::{
     Ebb, ExtFuncData, FuncRef, GlobalValue, GlobalValueData, Heap, HeapData, JumpTable,
     JumpTableData, SigRef, StackSlot, StackSlotData, Table, TableData,
 };
-use crate::ir::{EbbOffsets, InstEncodings, SourceLocs, StackSlots, ValueLocations};
+use crate::ir::{EbbOffsets, FrameLayout, InstEncodings, SourceLocs, StackSlots, ValueLocations};
 use crate::ir::{JumpTableOffsets, JumpTables};
 use crate::isa::{CallConv, EncInfo, Encoding, Legalize, TargetIsa};
 use crate::regalloc::RegDiversions;
@@ -74,6 +74,13 @@ pub struct Function {
     /// Track the original source location for each instruction. The source locations are not
     /// interpreted by Cranelift, only preserved.
     pub srclocs: SourceLocs,
+
+    /// Frame layout for the instructions.
+    ///
+    /// The stack unwinding requires to have information about which registers and where they
+    /// are saved in the frame. This information is created during the prologue and epilogue
+    /// passes.
+    pub frame_layout: FrameLayout,
 }
 
 impl Function {
@@ -94,6 +101,7 @@ impl Function {
             offsets: SecondaryMap::new(),
             jt_offsets: SecondaryMap::new(),
             srclocs: SecondaryMap::new(),
+            frame_layout: FrameLayout::new(),
         }
     }
 
@@ -111,6 +119,7 @@ impl Function {
         self.locations.clear();
         self.offsets.clear();
         self.srclocs.clear();
+        self.frame_layout.clear();
     }
 
     /// Create a new empty, anonymous function with a Fast calling convention.
