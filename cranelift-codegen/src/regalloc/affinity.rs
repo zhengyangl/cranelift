@@ -9,7 +9,9 @@
 //! larger register class instead.
 
 use crate::ir::{AbiParam, ArgumentLoc};
-use crate::isa::{ConstraintKind, OperandConstraint, RegClassIndex, RegInfo, TargetIsa};
+use crate::isa::{
+    ConstraintKind, OperandConstraint, RegClass, RegClassIndex, RegInfo, RegUnit, TargetIsa,
+};
 use core::fmt;
 
 /// Preferred register allocation for an SSA value.
@@ -25,7 +27,10 @@ pub enum Affinity {
     Stack,
 
     /// This value prefers a register from the given register class.
-    Reg(RegClassIndex),
+    RegClass(RegClassIndex),
+
+    /// This value prefers a specific register unit
+    RegUnit(RegUnit),
 }
 
 impl Default for Affinity {
@@ -40,10 +45,9 @@ impl Affinity {
     /// This will never create an `Affinity::Unassigned`.
     /// Use the `Default` implementation for that.
     pub fn new(constraint: &OperandConstraint) -> Self {
-        if constraint.kind == ConstraintKind::Stack {
-            Affinity::Stack
-        } else {
-            Affinity::Reg(constraint.regclass.into())
+        match constraint.kind {
+            ConstraintKind::Stack => Affinity::Stack,
+            _ => Affinity::RegClass(constraint.regclass.into()),
         }
     }
 
@@ -51,7 +55,9 @@ impl Affinity {
     pub fn abi(arg: &AbiParam, isa: &dyn TargetIsa) -> Self {
         match arg.location {
             ArgumentLoc::Unassigned => Affinity::Unassigned,
-            ArgumentLoc::Reg(_) => Affinity::Reg(isa.regclass_for_abi_type(arg.value_type).into()),
+            ArgumentLoc::Reg(_) => {
+                Affinity::RegClass(isa.regclass_for_abi_type(arg.value_type).into())
+            }
             ArgumentLoc::Stack(_) => Affinity::Stack,
         }
     }
@@ -67,7 +73,7 @@ impl Affinity {
     /// Is this the `Reg` affinity?
     pub fn is_reg(self) -> bool {
         match self {
-            Affinity::Reg(_) => true,
+            Affinity::RegUnit(_) | Affinity::RegClass(_) => true,
             _ => false,
         }
     }
@@ -80,6 +86,22 @@ impl Affinity {
         }
     }
 
+    pub fn rc_in(&self, reginfo: &RegInfo) -> Option<RegClass> {
+        match self {
+            Affinity::RegUnit(reg) => Some(reginfo.toprc_containing_regunit(*reg)),
+            Affinity::RegClass(rci) => Some(reginfo.rc(*rci)),
+            _ => None,
+        }
+    }
+
+    pub fn toprc_in(&self, reginfo: &RegInfo) -> Option<RegClass> {
+        match self {
+            Affinity::RegUnit(reg) => Some(reginfo.toprc_containing_regunit(*reg)),
+            Affinity::RegClass(rci) => Some(reginfo.toprc(*rci)),
+            _ => None,
+        }
+    }
+
     /// Merge an operand constraint into this affinity.
     ///
     /// Note that this does not guarantee that the register allocator will pick a register that
@@ -87,7 +109,7 @@ impl Affinity {
     pub fn merge(&mut self, constraint: &OperandConstraint, reginfo: &RegInfo) {
         match *self {
             Affinity::Unassigned => *self = Self::new(constraint),
-            Affinity::Reg(rc) => {
+            Affinity::RegClass(rc) => {
                 // If the preferred register class is a subclass of the constraint, there's no need
                 // to change anything.
                 if constraint.kind != ConstraintKind::Stack && !constraint.regclass.has_subclass(rc)
@@ -96,11 +118,56 @@ impl Affinity {
                     // we just keep our previous affinity.
                     if let Some(subclass) = constraint.regclass.intersect_index(reginfo.rc(rc)) {
                         // This constraint shrinks our preferred register class.
-                        *self = Affinity::Reg(subclass);
+                        *self = Affinity::RegClass(subclass);
                     }
                 }
             }
+            // Either the constraint is a stack constraint, and we would just keep this affinity,
+            // or it's a register constraint. If it's a register constraint, it's either the same,
+            // and we wouldn't change the affinity, or it's a different constraint, which has no
+            // intersection with this register, and wouldn't change the affinity.
+            //
+            // In all cases, we wouldn't change the affinity.
+            Affinity::RegUnit(_) => {}
             Affinity::Stack => {}
+        }
+    }
+
+    /// Compute the maximal intersection between this affinity and some other affinity.
+    ///
+    /// In cases where the two affinities conflict, this affinity wins out.
+    pub fn intersect(&mut self, other: &Affinity, reginfo: &RegInfo) {
+        match *self {
+            Affinity::Unassigned => {
+                // Unassigned is the least picky affinity, we can accept anything more precise.
+                *self = other.clone();
+            }
+            Affinity::RegClass(curr_rci) => {
+                // Register class affinities can be narrowed, if a narrower class exists.
+                match other {
+                    Affinity::RegUnit(new_unit) => {
+                        // if the other affinity is for a compatible register, we can use it
+                        if reginfo.rc(curr_rci).contains(*new_unit) {
+                            *self = Affinity::RegUnit(*new_unit);
+                        }
+                    }
+                    Affinity::RegClass(new_rci) => {
+                        // or if the affinity is for a register class more precise than the
+                        // current, we can also use it
+                        if let Some(subclass) =
+                            reginfo.rc(curr_rci).intersect_index(reginfo.rc(*new_rci))
+                        {
+                            *self = Affinity::RegClass(subclass);
+                        }
+                    }
+                    // other cases are either wider or equivalent
+                    _ => {}
+                }
+            }
+            // Either this is already a RegUnit affinity, and either the same or not useful, or
+            // this is a Stack affinity, and the new affinity is conflicting or a no-more-precise
+            // Stack affinity
+            _ => {}
         }
     }
 
@@ -119,9 +186,13 @@ impl<'a> fmt::Display for DisplayAffinity<'a> {
         match self.0 {
             Affinity::Unassigned => write!(f, "unassigned"),
             Affinity::Stack => write!(f, "stack"),
-            Affinity::Reg(rci) => match self.1 {
+            Affinity::RegClass(rci) => match self.1 {
                 Some(regs) => write!(f, "{}", regs.rc(rci)),
                 None => write!(f, "{}", rci),
+            },
+            Affinity::RegUnit(unit) => match self.1 {
+                Some(regs) => write!(f, "{}", regs.display_regunit(unit)),
+                None => write!(f, "{}", unit),
             },
         }
     }
