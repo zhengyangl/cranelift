@@ -80,7 +80,7 @@ pub struct Function {
     /// The stack unwinding requires to have information about which registers and where they
     /// are saved in the frame. This information is created during the prologue and epilogue
     /// passes.
-    pub frame_layout: FrameLayout,
+    pub frame_layout: Option<FrameLayout>,
 }
 
 impl Function {
@@ -101,7 +101,7 @@ impl Function {
             offsets: SecondaryMap::new(),
             jt_offsets: SecondaryMap::new(),
             srclocs: SecondaryMap::new(),
-            frame_layout: FrameLayout::new(),
+            frame_layout: None,
         }
     }
 
@@ -119,7 +119,7 @@ impl Function {
         self.locations.clear();
         self.offsets.clear();
         self.srclocs.clear();
-        self.frame_layout.clear();
+        self.frame_layout = None;
     }
 
     /// Create a new empty, anonymous function with a Fast calling convention.
@@ -227,6 +227,7 @@ impl Function {
     /// Starts collection of debug information.
     pub fn collect_debug_info(&mut self) {
         self.dfg.collect_debug_info();
+        self.frame_layout = Some(FrameLayout::new());
     }
 }
 

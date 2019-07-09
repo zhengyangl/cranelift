@@ -27,7 +27,7 @@ pub enum FrameLayoutChange {
         cfa_offset: isize,
     },
     /// Return address saved at.
-    RaAt {
+    ReturnAddressAt {
         /// Offset in the frame (offset from CFA).
         cfa_offset: isize,
     },
@@ -36,13 +36,14 @@ pub enum FrameLayoutChange {
 /// Set of frame layout changes.
 pub type FrameLayoutChanges = Box<[FrameLayoutChange]>;
 
-/// Frame items layout for (prologue/epilog) instructions.
+/// Frame items layout for (prologue/epilogue) instructions.
 #[derive(Debug, Clone)]
 pub struct FrameLayout {
     /// Initial frame layout.
     pub initial: FrameLayoutChanges,
 
-    /// Instruction frame layout (changes).
+    /// Instruction frame layout (changes). The map will not be dense,
+    /// a HashMap is used instead of a SecondaryMap.
     pub instructions: HashMap<Inst, FrameLayoutChanges>,
 }
 

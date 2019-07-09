@@ -301,9 +301,9 @@ fn baldrdash_prologue_epilogue(func: &mut ir::Function, isa: &dyn TargetIsa) -> 
 }
 
 struct CFAState {
-    reg: RegUnit,
-    offset: isize,
-    position: isize,
+    cf_ptr_reg: RegUnit,
+    cf_ptr_offset: isize,
+    current_depth: isize,
 }
 
 /// Implementation of the fastcall-based Win64 calling convention described at [1]
@@ -368,9 +368,9 @@ fn fastcall_prologue_epilogue(func: &mut ir::Function, isa: &dyn TargetIsa) -> C
     }
 
     let mut cfa_state = CFAState {
-        reg: RU::rsp as RegUnit,
-        offset: word_size as isize,
-        position: -(word_size as isize),
+        cf_ptr_reg: RU::rsp as RegUnit,
+        cf_ptr_offset: word_size as isize,
+        current_depth: -(word_size as isize),
     };
 
     // Set up the cursor and insert the prologue
@@ -436,9 +436,9 @@ fn system_v_prologue_epilogue(func: &mut ir::Function, isa: &dyn TargetIsa) -> C
     }
 
     let mut cfa_state = CFAState {
-        reg: RU::rsp as RegUnit,
-        offset: word_size as isize,
-        position: -(word_size as isize),
+        cf_ptr_reg: RU::rsp as RegUnit,
+        cf_ptr_offset: word_size as isize,
+        current_depth: -(word_size as isize),
     };
 
     // Set up the cursor and insert the prologue
@@ -485,16 +485,18 @@ fn insert_common_prologue(
         }
     }
 
-    pos.func.frame_layout.initial = vec![
-        FrameLayoutChange::CallFrameAddressAt {
-            reg: cfa_state.reg,
-            offset: cfa_state.offset,
-        },
-        FrameLayoutChange::RaAt {
-            cfa_offset: cfa_state.position,
-        },
-    ]
-    .into_boxed_slice();
+    if let Some(ref mut frame_layout) = pos.func.frame_layout {
+        frame_layout.initial = vec![
+            FrameLayoutChange::CallFrameAddressAt {
+                reg: cfa_state.cf_ptr_reg,
+                offset: cfa_state.cf_ptr_offset,
+            },
+            FrameLayoutChange::ReturnAddressAt {
+                cfa_offset: cfa_state.current_depth,
+            },
+        ]
+        .into_boxed_slice();
+    }
 
     // Append param to entry EBB
     let ebb = pos.current_ebb().expect("missing ebb under cursor");
@@ -503,34 +505,38 @@ fn insert_common_prologue(
 
     let push_fp_inst = pos.ins().x86_push(fp);
     let word_size = word_size as isize;
-    cfa_state.position -= word_size;
-    cfa_state.offset += word_size;
-    pos.func.frame_layout.instructions.insert(
-        push_fp_inst,
-        vec![
-            FrameLayoutChange::CallFrameAddressAt {
-                reg: cfa_state.reg,
-                offset: cfa_state.offset,
-            },
-            FrameLayoutChange::RegAt {
-                reg: RU::rbp as RegUnit,
-                cfa_offset: cfa_state.position,
-            },
-        ]
-        .into_boxed_slice(),
-    );
+    cfa_state.current_depth -= word_size;
+    cfa_state.cf_ptr_offset += word_size;
+    if let Some(ref mut frame_layout) = pos.func.frame_layout {
+        frame_layout.instructions.insert(
+            push_fp_inst,
+            vec![
+                FrameLayoutChange::CallFrameAddressAt {
+                    reg: cfa_state.cf_ptr_reg,
+                    offset: cfa_state.cf_ptr_offset,
+                },
+                FrameLayoutChange::RegAt {
+                    reg: RU::rbp as RegUnit,
+                    cfa_offset: cfa_state.current_depth,
+                },
+            ]
+            .into_boxed_slice(),
+        );
+    }
     let mov_sp_inst = pos
         .ins()
         .copy_special(RU::rsp as RegUnit, RU::rbp as RegUnit);
-    cfa_state.reg = RU::rbp as RegUnit;
-    pos.func.frame_layout.instructions.insert(
-        mov_sp_inst,
-        vec![FrameLayoutChange::CallFrameAddressAt {
-            reg: cfa_state.reg,
-            offset: cfa_state.offset,
-        }]
-        .into_boxed_slice(),
-    );
+    cfa_state.cf_ptr_reg = RU::rbp as RegUnit;
+    if let Some(ref mut frame_layout) = pos.func.frame_layout {
+        frame_layout.instructions.insert(
+            mov_sp_inst,
+            vec![FrameLayoutChange::CallFrameAddressAt {
+                reg: cfa_state.cf_ptr_reg,
+                offset: cfa_state.cf_ptr_offset,
+            }]
+            .into_boxed_slice(),
+        );
+    }
 
     for reg in csrs.iter(GPR) {
         // Append param to entry EBB
@@ -541,15 +547,17 @@ fn insert_common_prologue(
 
         // Remember it so we can push it momentarily
         let reg_push_inst = pos.ins().x86_push(csr_arg);
-        cfa_state.position -= word_size;
-        pos.func.frame_layout.instructions.insert(
-            reg_push_inst,
-            vec![FrameLayoutChange::RegAt {
-                reg: reg,
-                cfa_offset: cfa_state.position,
-            }]
-            .into_boxed_slice(),
-        );
+        cfa_state.current_depth -= word_size;
+        if let Some(ref mut frame_layout) = pos.func.frame_layout {
+            frame_layout.instructions.insert(
+                reg_push_inst,
+                vec![FrameLayoutChange::RegAt {
+                    reg: reg,
+                    cfa_offset: cfa_state.current_depth,
+                }]
+                .into_boxed_slice(),
+            );
+        }
     }
 
     // Allocate stack frame storage.
