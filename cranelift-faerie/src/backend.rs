@@ -14,9 +14,9 @@ use failure::Error;
 use std::fs::File;
 use target_lexicon::Triple;
 
+use gimli::write::Address;
 use gimli::write::CallFrameInstruction;
 use gimli::write::CommonInformationEntry;
-use gimli::write::Address;
 use gimli::write::FrameDescriptionEntry;
 
 #[derive(Debug)]
@@ -99,14 +99,14 @@ impl FrameSink {
             gimli::Encoding {
                 format: gimli::Format::Dwarf32,
                 version: 1,
-                address_size: 4
+                address_size: 4,
             },
             // code alignment factor
             0x01,
             // data alignment factor
             -0x08,
             // ISA-specific, return address register
-            gimli::Register(0x10)
+            gimli::Register(0x10),
         );
 
         cie.fde_address_encoding = gimli::DwEhPe(0x1b);
@@ -118,7 +118,7 @@ impl FrameSink {
         FrameSink {
             fn_names: vec![],
             table,
-            default_cie: cie_id
+            default_cie: cie_id,
         }
     }
 
@@ -129,7 +129,7 @@ impl FrameSink {
         self.fn_names.push(name.to_string());
         Address::Symbol {
             symbol: self.fn_names.len() - 1,
-            addend: 0
+            addend: 0,
         }
     }
 
@@ -147,11 +147,15 @@ struct FaerieDebugSink<'a> {
     pub artifact: &'a mut faerie::Artifact,
 }
 
-impl <'a> gimli::write::Writer for FaerieDebugSink<'a> {
+impl<'a> gimli::write::Writer for FaerieDebugSink<'a> {
     type Endian = gimli::LittleEndian;
 
-    fn endian(&self) -> Self::Endian { gimli::LittleEndian }
-    fn len(&self) -> usize { self.data.len() }
+    fn endian(&self) -> Self::Endian {
+        gimli::LittleEndian
+    }
+    fn len(&self) -> usize {
+        self.data.len()
+    }
     fn write(&mut self, bytes: &[u8]) -> gimli::write::Result<()> {
         self.data.extend_from_slice(bytes);
         Ok(())
@@ -165,7 +169,12 @@ impl <'a> gimli::write::Writer for FaerieDebugSink<'a> {
         Ok(())
     }
 
-    fn write_eh_pointer(&mut self, address: Address, eh_pe: gimli::DwEhPe, size: u8) -> gimli::write::Result<()> {
+    fn write_eh_pointer(
+        &mut self,
+        address: Address,
+        eh_pe: gimli::DwEhPe,
+        size: u8,
+    ) -> gimli::write::Result<()> {
         // we only support PC-relative 4byte signed offsets for eh_frame pointers currently. Other
         // encodings may be permissible, but aren't seen even by gcc/clang/etc, and have not been
         // tested. Currently, relocations used for addresses expect to be relocating four bytes,
@@ -189,17 +198,19 @@ impl <'a> gimli::write::Writer for FaerieDebugSink<'a> {
 
                 let reloc = faerie::artifact::Reloc::Raw {
                     reloc: goblin::elf::reloc::R_X86_64_PC32,
-                    addend: 0
+                    addend: 0,
                 };
 
-                self.artifact.link_with(
-                    faerie::Link {
-                        to: name,
-                        from: ".eh_frame",
-                        at: self.data.len() as u64
-                    },
-                    reloc
-                );
+                self.artifact
+                    .link_with(
+                        faerie::Link {
+                            to: name,
+                            from: ".eh_frame",
+                            at: self.data.len() as u64,
+                        },
+                        reloc,
+                    )
+                    .map_err(|_link_err| gimli::write::Error::InvalidAddress)?;
 
                 self.write_udata(0, size)
             }
@@ -219,7 +230,7 @@ impl FaerieCompiledFunction {
 
 struct CFIEncoder {
     cfa_def_reg: Option<isa::RegUnit>,
-    cfa_def_offset: Option<isize>
+    cfa_def_offset: Option<isize>,
 }
 
 struct DwarfRegMapper<'a> {
@@ -227,11 +238,11 @@ struct DwarfRegMapper<'a> {
     reg_info: RegInfo,
 }
 
-impl <'a> DwarfRegMapper<'a> {
+impl<'a> DwarfRegMapper<'a> {
     pub fn for_isa(isa: &'a Box<dyn TargetIsa>) -> Self {
         DwarfRegMapper {
             isa,
-            reg_info: isa.register_info()
+            reg_info: isa.register_info(),
         }
     }
 
@@ -244,23 +255,15 @@ impl <'a> DwarfRegMapper<'a> {
             "x86" => {
                 const X86_GP_REG_MAP: [u16; 16] = [
                     // cranelift rax == 0 -> dwarf rax == 0
-                    0,
-                    // cranelift rcx == 1 -> dwarf rcx == 2
-                    2,
-                    // cranelift rdx == 2 -> dwarf rdx == 1
-                    1,
-                    // cranelift rbx == 3 -> dwarf rbx == 3
-                    3,
-                    // cranelift rsp == 4 -> dwarf rsp == 7
-                    7,
-                    // cranelift rbp == 5 -> dwarf rbp == 6
-                    6,
-                    // cranelift rsi == 6 -> dwarf rsi == 4
-                    4,
-                    // cranelift rdi == 7 -> dwarf rdi == 5
-                    5,
-                    // all of r8 to r15 do map directly over
-                    8, 9, 10, 11, 12, 13, 14, 15
+                    0, // cranelift rcx == 1 -> dwarf rcx == 2
+                    2, // cranelift rdx == 2 -> dwarf rdx == 1
+                    1, // cranelift rbx == 3 -> dwarf rbx == 3
+                    3, // cranelift rsp == 4 -> dwarf rsp == 7
+                    7, // cranelift rbp == 5 -> dwarf rbp == 6
+                    6, // cranelift rsi == 6 -> dwarf rsi == 4
+                    4, // cranelift rdi == 7 -> dwarf rdi == 5
+                    5, // all of r8 to r15 do map directly over
+                    8, 9, 10, 11, 12, 13, 14, 15,
                 ];
                 let bank = self.reg_info.bank_containing_regunit(reg).unwrap();
                 match bank.name {
@@ -301,9 +304,7 @@ impl <'a> DwarfRegMapper<'a> {
     /// panics if that location is unknown - the requested debug information would be unencodable.
     pub fn return_address(&self) -> gimli::Register {
         match self.isa.name() {
-            "x86" => {
-                gimli::Register(0x10)
-            }
+            "x86" => gimli::Register(0x10),
             "arm32" => {
                 // unlike AArch64, there is no explicit DWARF number for a return address
                 // so trying to encode a return address in arm32 is a logical error.
@@ -337,42 +338,56 @@ impl CFIEncoder {
     pub fn new() -> Self {
         CFIEncoder {
             cfa_def_reg: Some(4 /* this is rsp, trust me */), //None,
-            cfa_def_offset: None, // Some(16), // None,
+            cfa_def_offset: None,                             // Some(16), // None,
         }
     }
 
-    pub fn encode(&mut self, fd_entry: &mut FrameDescriptionEntry, reg_map: &DwarfRegMapper, changes: impl Iterator<Item=(u32, ir::FrameLayoutChange)>) {
+    pub fn encode(
+        &mut self,
+        fd_entry: &mut FrameDescriptionEntry,
+        reg_map: &DwarfRegMapper,
+        changes: impl Iterator<Item = (u32, ir::FrameLayoutChange)>,
+    ) {
         for (addr, change) in changes {
             match change {
                 ir::FrameLayoutChange::CallFrameAddressAt { reg, offset } => {
                     // if your call frame is more than 2gb, or -2rb.. sorry?
-                    assert_eq!(offset, offset as i32 as isize, "call frame offset beyond i32 range");
-                    match (Some(reg) == self.cfa_def_reg, Some(offset) == self.cfa_def_offset) {
+                    assert_eq!(
+                        offset, offset as i32 as isize,
+                        "call frame offset beyond i32 range"
+                    );
+                    match (
+                        Some(reg) == self.cfa_def_reg,
+                        Some(offset) == self.cfa_def_offset,
+                    ) {
                         (true, true) => {
                             /*
                              * this "change" would change nothing, so we don't have to
                              * do anything.
                              */
-                        },
+                        }
                         (false, true) => {
                             // reg pointing to the call frame has changed
                             fd_entry.add_instruction(
                                 addr,
-                                CallFrameInstruction::CfaRegister(reg_map.translate_reg(reg))
+                                CallFrameInstruction::CfaRegister(reg_map.translate_reg(reg)),
                             );
                         }
                         (true, false) => {
                             // the offset has changed, so emit CfaOffset
                             fd_entry.add_instruction(
                                 addr,
-                                CallFrameInstruction::CfaOffset(offset as i32)
+                                CallFrameInstruction::CfaOffset(offset as i32),
                             );
                         }
                         (false, false) => {
                             // the register and cfa offset have changed, so update both
                             fd_entry.add_instruction(
                                 addr,
-                                CallFrameInstruction::Cfa(reg_map.translate_reg(reg), offset as i32)
+                                CallFrameInstruction::Cfa(
+                                    reg_map.translate_reg(reg),
+                                    offset as i32,
+                                ),
                             );
                         }
                     }
@@ -382,13 +397,13 @@ impl CFIEncoder {
                 ir::FrameLayoutChange::RegAt { reg, cfa_offset } => {
                     fd_entry.add_instruction(
                         addr,
-                        CallFrameInstruction::Offset(reg_map.translate_reg(reg), cfa_offset as i32)
+                        CallFrameInstruction::Offset(reg_map.translate_reg(reg), cfa_offset as i32),
                     );
                 }
                 ir::FrameLayoutChange::ReturnAddressAt { cfa_offset } => {
                     fd_entry.add_instruction(
                         addr,
-                        CallFrameInstruction::Offset(reg_map.return_address(), cfa_offset as i32)
+                        CallFrameInstruction::Offset(reg_map.return_address(), cfa_offset as i32),
                     );
                 }
             }
@@ -490,15 +505,20 @@ impl Backend for FaerieBackend {
         let code_length = code.len() as u32;
 
         if let Some(ref mut frame_sink) = self.frame_sink {
-            let mut fd_entry = FrameDescriptionEntry::new(
-                frame_sink.address_for(name),
-                code_length
-            );
+            let mut fd_entry =
+                FrameDescriptionEntry::new(frame_sink.address_for(name), code_length);
 
             let mut frame_changes = vec![];
             for ebb in ctx.func.layout.ebbs() {
                 for (offset, inst, size) in ctx.func.inst_offsets(ebb, &self.isa.encoding_info()) {
-                    if let Some(changes) = ctx.func.frame_layout.as_ref().unwrap().instructions.get(&inst) {
+                    if let Some(changes) = ctx
+                        .func
+                        .frame_layout
+                        .as_ref()
+                        .unwrap()
+                        .instructions
+                        .get(&inst)
+                    {
                         for change in changes.iter() {
                             frame_changes.push((offset + size, change.clone()));
                         }
@@ -511,7 +531,7 @@ impl Backend for FaerieBackend {
             CFIEncoder::new().encode(
                 &mut fd_entry,
                 &DwarfRegMapper::for_isa(&self.isa),
-                frame_changes.into_iter()
+                frame_changes.into_iter(),
             );
 
             frame_sink.add_fde(fd_entry);
@@ -627,21 +647,25 @@ impl Backend for FaerieBackend {
     fn publish(&mut self) {
         if let Some(ref mut frame_sink) = self.frame_sink {
             self.artifact
-                .declare(".eh_frame", faerie::Decl::section(faerie::SectionKind::Data)).unwrap();
+                .declare(
+                    ".eh_frame",
+                    faerie::Decl::section(faerie::SectionKind::Data),
+                )
+                .unwrap();
 
             let mut eh_frame_bytes = Vec::new();
 
-            let mut eh_frame_writer = gimli::write::EhFrame(
-                FaerieDebugSink {
-                    data: &mut eh_frame_bytes,
-                    functions: frame_sink.fn_names.as_slice(),
-                    artifact: &mut self.artifact
-                }
-            );
-            frame_sink.table.write_eh_frame(&mut eh_frame_writer).unwrap();
+            let mut eh_frame_writer = gimli::write::EhFrame(FaerieDebugSink {
+                data: &mut eh_frame_bytes,
+                functions: frame_sink.fn_names.as_slice(),
+                artifact: &mut self.artifact,
+            });
+            frame_sink
+                .table
+                .write_eh_frame(&mut eh_frame_writer)
+                .unwrap();
 
-            self.artifact
-                .define(".eh_frame", eh_frame_bytes).unwrap();
+            self.artifact.define(".eh_frame", eh_frame_bytes).unwrap();
         }
     }
 
