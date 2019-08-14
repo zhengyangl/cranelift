@@ -325,6 +325,7 @@ impl CFIEncoder {
                             );
                         }
                         (false, false) => {
+                            // the register and cfa offset have changed, so update both
                             fd_entry.add_instruction(
                                 addr,
                                 CallFrameInstruction::Cfa(reg_map.translate_reg(reg), offset as i32)
@@ -594,38 +595,6 @@ impl Backend for FaerieBackend {
                 }
             );
             frame_sink.table.write_eh_frame(&mut eh_frame_writer).unwrap();
-            /*
-            frame_sink.cie.encode_to(&mut eh_frame_bytes);
-
-            for fde in frame_sink.fdes.iter() {
-                // Faerie requires all function references go through a PLT entry by default,
-                // but we need a direct offset to the function, so explicitly construct an absolute
-                // relocation and pass that. Because it's a reloc to an internal function, `ld`
-                // should turn this into a const offset and discard the relocation.
-                let absolute_reloc = match self.artifact.target.binary_format {
-                    target_lexicon::BinaryFormat::Elf => faerie::artifact::Reloc::Raw {
-                        reloc: goblin::elf::reloc::R_X86_64_PC32,
-                        addend: 0,
-                    },
-                    target_lexicon::BinaryFormat::Macho => faerie::artifact::Reloc::Raw {
-                        // TODO: how do we get a 32bit relocaion here, instead of 64?
-                        reloc: goblin::mach::relocation::X86_64_RELOC_UNSIGNED as u32,
-                        addend: 0,
-                    },
-                    _ => panic!("unsupported target format"),
-                };
-                self.artifact.link_with(
-                    faerie::Link {
-                        to: &fde.function,
-                        from: ".eh_frame",
-                        at: eh_frame_bytes.position() + 8,
-                    },
-                    absolute_reloc
-                );
-
-                fde.encode_to(&mut eh_frame_bytes, &frame_table.cie);
-            }
-            */
 
             self.artifact
                 .define(".eh_frame", eh_frame_bytes).unwrap();
