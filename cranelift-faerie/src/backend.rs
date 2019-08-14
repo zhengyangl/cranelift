@@ -208,13 +208,13 @@ impl <'a> DwarfRegMapper<'a> {
                     1,
                     // cranelift rbx == 3 -> dwarf rbx == 3
                     3,
-                    // cranelift rsp == 4 -> dwarf rsi == 6
-                    6,
-                    // cranelift rbp == 5 -> dwarf rdi == 7
+                    // cranelift rsp == 4 -> dwarf rsp == 7
                     7,
-                    // cranelift rsi == 6 -> dwarf rbp == 4
+                    // cranelift rbp == 5 -> dwarf rbp == 6
+                    6,
+                    // cranelift rsi == 6 -> dwarf rsi == 4
                     4,
-                    // cranelift rdi == 7 -> dwarf rsp == 5
+                    // cranelift rdi == 7 -> dwarf rdi == 5
                     5,
                     // all of r8 to r15 do map directly over
                     8, 9, 10, 11, 12, 13, 14, 15
@@ -293,8 +293,8 @@ impl <'a> DwarfRegMapper<'a> {
 impl CFIEncoder {
     pub fn new() -> Self {
         CFIEncoder {
-            cfa_def_reg: None,
-            cfa_def_offset: None,
+            cfa_def_reg: Some(4 /* this is rsp, trust me */), //None,
+            cfa_def_offset: None, // Some(16), // None,
         }
     }
 
@@ -312,17 +312,17 @@ impl CFIEncoder {
                              */
                         },
                         (false, true) => {
-                            // the offset has changed, so emit CfaOffset
-                            fd_entry.add_instruction(
-                                addr,
-                                CallFrameInstruction::CfaOffset(offset as i32)
-                            );
-                        }
-                        (true, false) => {
                             // reg pointing to the call frame has changed
                             fd_entry.add_instruction(
                                 addr,
                                 CallFrameInstruction::CfaRegister(reg_map.translate_reg(reg))
+                            );
+                        }
+                        (true, false) => {
+                            // the offset has changed, so emit CfaOffset
+                            fd_entry.add_instruction(
+                                addr,
+                                CallFrameInstruction::CfaOffset(offset as i32)
                             );
                         }
                         (false, false) => {
