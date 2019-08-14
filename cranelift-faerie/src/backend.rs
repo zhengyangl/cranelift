@@ -110,8 +110,7 @@ impl FrameSink {
         );
 
         cie.add_instruction(CallFrameInstruction::Cfa(gimli::Register(7), 8));
-        // TODO: this may well be wrong. check offset, negative sizes aren't factored?
-        cie.add_instruction(CallFrameInstruction::Offset(gimli::Register(10), -8));
+        cie.add_instruction(CallFrameInstruction::Offset(gimli::Register(0x10), -8));
         let cie_id = table.add_cie(cie);
 
         FrameSink {
