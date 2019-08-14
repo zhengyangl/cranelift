@@ -97,9 +97,9 @@ impl FrameSink {
         let mut table = gimli::write::FrameTable::default();
         let mut cie = CommonInformationEntry::new(
             gimli::Encoding {
-                format: gimli::Format::Dwarf64,
+                format: gimli::Format::Dwarf32,
                 version: 1,
-                address_size: 8
+                address_size: 4
             },
             // code alignment factor
             0x01,
@@ -108,6 +108,8 @@ impl FrameSink {
             // ISA-specific, return address register
             gimli::Register(0x10)
         );
+
+        cie.fde_address_encoding = gimli::DwEhPe(0x1b);
 
         cie.add_instruction(CallFrameInstruction::Cfa(gimli::Register(7), 8));
         cie.add_instruction(CallFrameInstruction::Offset(gimli::Register(0x10), -8));
@@ -154,12 +156,54 @@ impl <'a> gimli::write::Writer for FaerieDebugSink<'a> {
         self.data.extend_from_slice(bytes);
         Ok(())
     }
+
     fn write_at(&mut self, offset: usize, bytes: &[u8]) -> gimli::write::Result<()> {
         if offset + bytes.len() > self.data.len() {
             return Err(gimli::write::Error::LengthOutOfBounds);
         }
         self.data[offset..][..bytes.len()].copy_from_slice(bytes);
         Ok(())
+    }
+
+    fn write_eh_pointer(&mut self, address: Address, eh_pe: gimli::DwEhPe, size: u8) -> gimli::write::Result<()> {
+        // we only support PC-relative 4byte signed offsets for eh_frame pointers currently. Other
+        // encodings may be permissible, but aren't seen even by gcc/clang/etc, and have not been
+        // tested. Currently, relocations used for addresses expect to be relocating four bytes,
+        // PC-relative, and larger pointer sizes would require selection of other relocation types.
+        assert!(eh_pe.0 == 0x1b);
+
+        // if size is not 4, then the size indicated by `eh_pe` doesn't match with the pointer
+        // we're trying to encode. That's a logical bug, possibly in gimli?
+        assert!(size == 4);
+
+        self.write_address(address, size)
+    }
+
+    fn write_address(&mut self, address: Address, size: u8) -> gimli::write::Result<()> {
+        match address {
+            Address::Constant(val) => self.write_udata(val, size),
+            Address::Symbol { symbol, addend } => {
+                assert!(addend == 0);
+
+                let name = self.functions[symbol].as_str();
+
+                let reloc = faerie::artifact::Reloc::Raw {
+                    reloc: goblin::elf::reloc::R_X86_64_PC32,
+                    addend: 0
+                };
+
+                self.artifact.link_with(
+                    faerie::Link {
+                        to: name,
+                        from: ".eh_frame",
+                        at: self.data.len() as u64
+                    },
+                    reloc
+                );
+
+                self.write_udata(0, size)
+            }
+        }
     }
 }
 
