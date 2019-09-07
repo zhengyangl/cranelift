@@ -9,9 +9,7 @@
 //! larger register class instead.
 
 use crate::ir::{AbiParam, ArgumentLoc};
-use crate::isa::{
-    ConstraintKind, OperandConstraint, RegClass, RegClassIndex, RegInfo, RegUnit, TargetIsa,
-};
+use crate::isa::{ConstraintKind, OperandConstraint, RegClass, RegClassIndex, RegInfo, RegUnit};
 use core::fmt;
 
 /// Preferred register allocation for an SSA value.
@@ -47,17 +45,18 @@ impl Affinity {
     pub fn new(constraint: &OperandConstraint) -> Self {
         match constraint.kind {
             ConstraintKind::Stack => Affinity::Stack,
+            ConstraintKind::FixedReg(unit) | ConstraintKind::FixedTied(unit) => {
+                Affinity::RegUnit(unit)
+            }
             _ => Affinity::RegClass(constraint.regclass.into()),
         }
     }
 
     /// Create an affinity that matches an ABI argument for `isa`.
-    pub fn abi(arg: &AbiParam, isa: &dyn TargetIsa) -> Self {
+    pub fn abi(arg: &AbiParam) -> Self {
         match arg.location {
             ArgumentLoc::Unassigned => Affinity::Unassigned,
-            ArgumentLoc::Reg(_) => {
-                Affinity::RegClass(isa.regclass_for_abi_type(arg.value_type).into())
-            }
+            ArgumentLoc::Reg(unit) => Affinity::RegUnit(unit),
             ArgumentLoc::Stack(_) => Affinity::Stack,
         }
     }
@@ -110,16 +109,28 @@ impl Affinity {
         match *self {
             Affinity::Unassigned => *self = Self::new(constraint),
             Affinity::RegClass(rc) => {
-                // If the preferred register class is a subclass of the constraint, there's no need
-                // to change anything.
-                if constraint.kind != ConstraintKind::Stack && !constraint.regclass.has_subclass(rc)
-                {
-                    // If the register classes don't overlap, `intersect` returns `Unassigned`, and
-                    // we just keep our previous affinity.
-                    if let Some(subclass) = constraint.regclass.intersect_index(reginfo.rc(rc)) {
-                        // This constraint shrinks our preferred register class.
-                        *self = Affinity::RegClass(subclass);
+                match constraint.kind {
+                    ConstraintKind::RegClass => {
+                        // If the preferred register class is a subclass of the constraint, there's no need
+                        // to change anything.
+                        if !constraint.regclass.has_subclass(rc) {
+                            // If the register classes don't overlap, `intersect` returns `Unassigned`, and
+                            // we just keep our previous affinity.
+                            if let Some(subclass) =
+                                constraint.regclass.intersect_index(reginfo.rc(rc))
+                            {
+                                // This constraint shrinks our preferred register class.
+                                *self = Affinity::RegClass(subclass);
+                            }
+                        }
                     }
+                    ConstraintKind::FixedReg(reg) | ConstraintKind::FixedTied(reg) => {
+                        // If the constraint register indicates a more precise affinity, update it
+                        if reginfo.rc(rc).contains(reg) {
+                            *self = Affinity::RegUnit(reg);
+                        }
+                    }
+                    _ => {}
                 }
             }
             // Either the constraint is a stack constraint, and we would just keep this affinity,
