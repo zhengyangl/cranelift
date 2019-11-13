@@ -223,5 +223,11 @@ pub fn define() -> SettingGroup {
         true,
     );
 
+    settings.add_bool(
+        "enable_profile",
+        "Enable profiling",
+        false,
+    );
+
     settings.build()
 }

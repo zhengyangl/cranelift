@@ -29,6 +29,7 @@ use crate::result::CodegenResult;
 use crate::settings::{FlagsOrIsa, OptLevel};
 use crate::simple_gvn::do_simple_gvn;
 use crate::simple_preopt::do_preopt;
+use crate::instrumentation::do_instrumentation;
 use crate::timing;
 use crate::unreachable_code::eliminate_unreachable_code;
 use crate::value_label::{build_value_labels_ranges, ComparableSourceLoc, ValueLabelsRanges};
@@ -130,11 +131,15 @@ impl Context {
     pub fn compile(&mut self, isa: &dyn TargetIsa) -> CodegenResult<CodeInfo> {
         let _tt = timing::compile();
         self.verify_if(isa)?;
+
         debug!("Compiling:\n{}", self.func.display(isa));
 
         let opt_level = isa.flags().opt_level();
 
         self.compute_cfg();
+        if isa.flags().enable_profile() {
+            self.instrumentation(isa)?;
+        }
         if opt_level != OptLevel::None {
             self.preopt(isa)?;
         }
@@ -240,6 +245,13 @@ impl Context {
     pub fn dce<'a, FOI: Into<FlagsOrIsa<'a>>>(&mut self, fisa: FOI) -> CodegenResult<()> {
         do_dce(&mut self.func, &mut self.domtree);
         self.verify_if(fisa)?;
+        Ok(())
+    }
+
+    /// Perform pre-legalization rewrites on the function.
+    pub fn instrumentation(&mut self, isa: &dyn TargetIsa) -> CodegenResult<()> {
+        do_instrumentation(&mut self.func, &mut self.cfg, isa);
+        self.verify_if(isa)?;
         Ok(())
     }
 
