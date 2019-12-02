@@ -46,8 +46,12 @@ pub enum LibCall {
     Memset,
     /// libc.memmove
     Memmove,
-    /// profiler
-    PrintText,
+    /// profiler: inst hook
+    InstHook,
+    /// profiler: func hook enter
+    FuncHookEnter,
+    /// profiler: func hook exit
+    FuncHookExit,
 }
 
 impl fmt::Display for LibCall {
@@ -73,7 +77,9 @@ impl FromStr for LibCall {
             "Memcpy" => Ok(LibCall::Memcpy),
             "Memset" => Ok(LibCall::Memset),
             "Memmove" => Ok(LibCall::Memmove),
-            "PrintText" => Ok(LibCall::PrintText),
+            "InstHook" => Ok(LibCall::InstHook),
+            "FuncHookEnter" => Ok(LibCall::FuncHookEnter),
+            "FuncHookExit" => Ok(LibCall::FuncHookExit),
             _ => Err(()),
         }
     }

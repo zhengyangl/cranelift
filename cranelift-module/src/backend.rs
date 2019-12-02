@@ -162,5 +162,8 @@ pub fn default_libcall_names() -> Box<dyn Fn(ir::LibCall) -> String> {
         ir::LibCall::Memcpy => "memcpy".to_owned(),
         ir::LibCall::Memset => "memset".to_owned(),
         ir::LibCall::Memmove => "memmove".to_owned(),
+        ir::LibCall::InstHook => "insthook".to_owned(),
+        ir::LibCall::FuncHookEnter => "funchookenter".to_owned(),
+        ir::LibCall::FuncHookExit => "funchookexit".to_owned(),
     })
 }
