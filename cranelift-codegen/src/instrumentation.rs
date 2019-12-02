@@ -13,10 +13,11 @@ use crate::flowgraph::ControlFlowGraph;
 
 /// The main pre-opt pass.
 pub fn do_instrumentation(func: &mut Function, _cfg: &mut ControlFlowGraph, isa: &dyn TargetIsa) {
-    print!("{}\n",func);
+//    print!("{}\n",func);
+    let count_instruction = false;
 
     // look at only user defined functions
-    if let ExternalName::User { namespace, index } = func.name{
+    if let ExternalName::User { namespace, index } = func.name {
 
         // get ready for the callsite
         let call_conv = CallConv::for_libcall(isa);
@@ -54,8 +55,8 @@ pub fn do_instrumentation(func: &mut Function, _cfg: &mut ControlFlowGraph, isa:
             {
                 let is_return = pos.func.dfg[_inst].opcode().is_return();
                 if is_entry {
-                    let f_i = pos.ins().iconst(I32, namespace as i64);
-                    let f_ns = pos.ins().iconst(I32, index as i64);
+                    let f_i = pos.ins().iconst(I32, index as i64);
+                    let f_ns = pos.ins().iconst(I32, namespace as i64);
                     function_i = Some(f_i);
                     function_ns = Some(f_ns);
 
@@ -65,7 +66,10 @@ pub fn do_instrumentation(func: &mut Function, _cfg: &mut ControlFlowGraph, isa:
 
 
                 if let (Some(f_i), Some(f_ns)) = (function_i, function_ns) {
-                    pos.ins().call(insthook, &[f_ns, f_i]);
+                    if count_instruction {
+                        pos.ins().call(insthook, &[f_ns, f_i]);
+                    }
+
                     if is_return {
                         pos.ins().call(funchook_exit, &[f_ns, f_i]);
                     }
@@ -77,4 +81,5 @@ pub fn do_instrumentation(func: &mut Function, _cfg: &mut ControlFlowGraph, isa:
         }
 
     }
+//    print!("{}\n",func);
 }
