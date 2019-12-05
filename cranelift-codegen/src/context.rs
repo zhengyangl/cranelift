@@ -36,6 +36,7 @@ use crate::value_label::{build_value_labels_ranges, ComparableSourceLoc, ValueLa
 use crate::verifier::{verify_context, verify_locations, VerifierErrors, VerifierResult};
 use alloc::vec::Vec;
 use log::debug;
+use std::env;
 
 /// Persistent data structures and compilation pipeline.
 pub struct Context {
@@ -136,8 +137,9 @@ impl Context {
         let opt_level = isa.flags().opt_level();
 
         self.compute_cfg();
-        self.instrumentation(isa)?;
-
+        if !env::var("CRANELIFT_ENABLE_PROFILING").is_err() {
+            self.instrumentation(isa)?;
+        }
         if opt_level != OptLevel::None {
             self.preopt(isa)?;
         }
