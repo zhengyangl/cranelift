@@ -165,8 +165,6 @@ impl Context {
         if opt_level == OptLevel::SpeedAndSize {
             self.shrink_instructions(isa)?;
         }
-
-
         let result = self.relax_branches(isa);
 
         debug!("Compiled:\n{}", self.func.display(isa));
