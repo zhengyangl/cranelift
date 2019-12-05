@@ -1,15 +1,12 @@
 use crate::cursor::{Cursor, FuncCursor};
-use crate::ir::{
-    types::I32, entities::Value, Function, InstBuilder, LibCall, ExternalName, Signature, ExtFuncData, AbiParam
-};
+use crate::ir::{types::I32, entities::Value, Function, InstBuilder, LibCall, ExternalName, Signature, ExtFuncData, AbiParam};
 use crate::isa::{CallConv, TargetIsa};
 use crate::flowgraph::ControlFlowGraph;
+use std::env;
+
 
 /// The main pre-opt pass.
 pub fn do_instrumentation(func: &mut Function, _cfg: &mut ControlFlowGraph, isa: &dyn TargetIsa) {
-//    print!("{}\n",func);
-    let count_instruction = false;
-
     // look at only user defined functions
     if let ExternalName::User { namespace, index } = func.name {
 
@@ -59,9 +56,8 @@ pub fn do_instrumentation(func: &mut Function, _cfg: &mut ControlFlowGraph, isa:
                     is_entry = false;
                 }
 
-
                 if let (Some(f_i), Some(f_ns)) = (function_i, function_ns) {
-                    if count_instruction {
+                    if !env::var("CRANELIFT_COUNT_INSTRUCTION").is_err() {
                         pos.ins().call(insthook, &[f_ns, f_i]);
                     }
 
@@ -71,10 +67,7 @@ pub fn do_instrumentation(func: &mut Function, _cfg: &mut ControlFlowGraph, isa:
                 } else {
                     panic! ("Error: function info has not been inserted as constants");
                 }
-
             }
         }
-
     }
-//    print!("{}\n",func);
 }
