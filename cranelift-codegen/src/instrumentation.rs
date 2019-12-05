@@ -1,12 +1,6 @@
 use crate::cursor::{Cursor, FuncCursor};
 use crate::ir::{
-    condcodes::{CondCode, IntCC},
-    dfg::ValueDef,
-    immediates,
-    instructions::{Opcode, ValueList},
-    types::{I16, I32, I64, I8},
-    entities::Value,
-    DataFlowGraph, Ebb, Function, Inst, InstBuilder, InstructionData, Type, LibCall, ExternalName, Signature, ExtFuncData, AbiParam
+    types::I32, entities::Value, Function, InstBuilder, LibCall, ExternalName, Signature, ExtFuncData, AbiParam
 };
 use crate::isa::{CallConv, TargetIsa};
 use crate::flowgraph::ControlFlowGraph;
@@ -25,6 +19,7 @@ pub fn do_instrumentation(func: &mut Function, _cfg: &mut ControlFlowGraph, isa:
         sig.params.push(AbiParam::new(I32));
         sig.params.push(AbiParam::new(I32));
         let sigref = func.import_signature(sig);
+
         let insthook = func.import_function(ExtFuncData {
             name: ExternalName::LibCall(LibCall::InstHook),
             signature: sigref,
