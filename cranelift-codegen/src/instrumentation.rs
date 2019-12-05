@@ -57,7 +57,7 @@ pub fn do_instrumentation(func: &mut Function, _cfg: &mut ControlFlowGraph, isa:
                 }
 
                 if let (Some(f_i), Some(f_ns)) = (function_i, function_ns) {
-                    if !env::var("CRANELIFT_COUNT_INSTRUCTION").is_err() {
+                    if !env::var("CRANELIFT_COUNT_INSTRUCTIONS").is_err() {
                         pos.ins().call(insthook, &[f_ns, f_i]);
                     }
 
